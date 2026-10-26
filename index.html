@@ -824,7 +824,7 @@ function munLocais(uf, cd){
   for(const [nr,L] of Object.entries(lv.loc)){ const l={nr, nm:L[0], bairro:L[1]||"(sem bairro)", end:L[2], lat:L[3], lon:L[4], te:L[5], zonas:Object.keys(L[6]), agg:{a:0,c:0,b:0,n:0,v:{},done:0,total:0,secs:[]}}; locais.push(l); byNr[nr]=l; }
   // cada seção vai para o local que o boletim de urna informa (seções realocadas depois do cadastro); sem boletim, fica no local do cadastro
   for(const [nr,L] of Object.entries(lv.loc)){
-    for(const [z,ss] of Object.entries(L[6])){ for(const s of ss){ const r=sec[z]?.[String(s)]; const tgt=(r && r[0]!=null && byNr[String(r[0])]) ? byNr[String(r[0])] : byNr[nr]; const agg=tgt.agg;
+    for(const [z,ss] of Object.entries(L[6])){ for(const s of ss){ const r=sec[z]?.[String(s)]; const tgt=(r && r[0]!=null && byNr[z+"-"+String(r[0])]) ? byNr[z+"-"+String(r[0])] : byNr[nr]; /* local do BU é numerado dentro da zona */ const agg=tgt.agg;
       agg.total++; total++; agg.secs.push({z,s,r}); if(r){ agg.done++; done++; agg.a+=r[1]; agg.c+=r[2]; agg.b+=r[3]; agg.n+=r[4]; r[5].forEach(([k,v])=>{agg.v[k]=(agg.v[k]||0)+v;}); } } }
   }
   for(const l of locais){ const agg=l.agg; agg.vv=Object.values(agg.v).reduce((x,y)=>x+y,0); agg.top=Object.entries(agg.v).sort((x,y)=>y[1]-x[1]);
