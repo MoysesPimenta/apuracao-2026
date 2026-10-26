@@ -104,6 +104,9 @@ button{font:inherit;color:inherit}
 .mapbox circle{cursor:pointer;transition:opacity .15s}
 .mapbox circle:hover{stroke:var(--ink);stroke-width:1.6}
 .mapbox circle.sel{stroke:var(--ink);stroke-width:2.6}
+.mapbox path.cell{cursor:pointer}
+.mapbox path.cell:hover{stroke:var(--ink);stroke-width:1.2}
+.mapbox path.cell.sel{stroke:var(--ink);stroke-width:2}
 .mapbox .lbls{pointer-events:none}
 .mapbox .lbl text{fill:var(--ink);stroke:var(--surface);stroke-width:3px;stroke-linejoin:round;paint-order:stroke;font-family:var(--f-mono);font-weight:500}
 .mapbox .lbl .sg{font-family:var(--f-display);font-weight:800;font-stretch:85%;letter-spacing:.02em}
@@ -741,13 +744,13 @@ async function ensureZon(uf, cd){
   Z[uf].fetchedAt=new Date().toISOString();
 }
 function unsubMun(){}
-async function goBR(){ unsubMun(); mapLevel="br"; mapUF=null; mapMun=null; await renderMap(); }
+async function goBR(){ unsubMun(); stopLive(); mapLevel="br"; mapUF=null; mapMun=null; await renderMap(); }
 async function goUF(uf){ if(mapUF!==uf) unsubMun(); mapLevel="mun"; mapUF=uf; mapMun=null; await renderMap(); ensureMun(uf).then(()=>{paintMap();renderSide();}); }
-async function goMun(cd){ mapMun=cd; mapLoc=null; mapBairro=null; mapLevel="loc"; await renderMap(); ensureZon(mapUF, cd).then(()=>{ if(mapLevel==="loc") renderSide(); }); loadLoc(mapUF, cd); }
-function backToUF(){ mapLevel="mun"; mapMun=null; mapLoc=null; mapBairro=null; renderMap(); }
+async function goMun(cd){ stopLive(); mapMun=cd; mapLoc=null; mapBairro=null; mapLevel="loc"; await renderMap(); ensureZon(mapUF, cd).then(()=>{ if(mapLevel==="loc") renderSide(); }); loadLoc(mapUF, cd); }
+function backToUF(){ stopLive(); mapLevel="mun"; mapMun=null; mapLoc=null; mapBairro=null; renderMap(); }
 
 /* ---------- nível município: locais de votação (pontos), bairros e seções (boletins de urna) ---------- */
-const LVS={}, SECS={1:{},2:{}}, LOCAGG={}; let mapLoc=null, mapBairro=null, locZoom="urb";
+const LVS={}, SECS={1:{},2:{}}, LOCAGG={}; let mapLoc=null, mapBairro=null, locZoom="urb", locView="auto";
 function secDir(t){ return t===LATEST ? "sec" : `sec_t${t}`; }
 async function fetchJSONz(url, opts){   // .json.gz (cru ou já descomprimido pelo servidor) ou .json
   const r=await fetch(url, opts||{}); if(!r.ok) throw new Error("HTTP "+r.status);
@@ -759,11 +762,53 @@ const DATA_EXT=[".json.gz",".json"];   // ordem de tentativa (o artifact não se
 async function fetchData(base, opts){ let last=null; for(const ext of DATA_EXT){ try{ return await fetchJSONz(base+ext, opts); }catch(e){ last=e; } } throw last||new Error("sem dados"); }
 async function ensureLV(uf){ if(LVS[uf]!==undefined) return LVS[uf]; try{ LVS[uf]=await fetchData(`lv/${uf}`,{cache:"force-cache"}); }catch(e){ LVS[uf]=null; } return LVS[uf]; }
 async function ensureSEC(uf){
-  const t=TURNO, S=SECS[t]; const cur=S[uf];
-  if(cur!==undefined && (cur===null ? Date.now()-(S["_t_"+uf]||0)<240000 : (t!==LATEST || Date.now()-(S["_t_"+uf]||0)<240000))) return cur;
-  let d=null; try{ d=await fetchData(`${secDir(t)}/${uf}`,{cache:"no-store"}); }catch(e){ d=null; }
-  S[uf]=d; S["_t_"+uf]=Date.now(); Object.keys(LOCAGG).filter(k=>k.startsWith(t+":"+uf+":")).forEach(k=>delete LOCAGG[k]); return d;
+  const t=TURNO, S=SECS[t]; if(S[uf]!==undefined) return S[uf];
+  let d=null; try{ d=await fetchData(`${secDir(t)}/${uf}`,{cache:"default"}); }catch(e){ d=null; }
+  S[uf]= d ? d : {uf, pleito:PLEITO[t], mun:{}, live:true};   // sem arquivo publicado: o que faltar e lido do TSE, secao a secao
+  if(!S[uf].mun) S[uf].mun={};
+  Object.keys(LOCAGG).filter(k=>k.startsWith(t+":"+uf+":")).forEach(k=>delete LOCAGG[k]); return S[uf];
 }
+const BU_BASE = BASE + "/arquivo-urna"; const PLEITO = {1:"3220", 2:"3221"}; const LIVE = {};
+function derIter(b, off, end){ const out=[]; end = end==null? b.length : end; while(off<end){ let tag=b[off++]; if((tag&0x1f)===0x1f) tag=(tag<<8)|b[off++]; let l=b[off++]; if(l&0x80){ const n=l&0x7f; l=0; for(let i=0;i<n;i++) l=l*256+b[off++]; } out.push([tag, b.subarray(off, off+l)]); off+=l; } return out; }
+function ival(v){ let x=0; for(const c of v) x=x*256+c; if(v.length && (v[0]&0x80)) x-=Math.pow(256,v.length); return x; }
+function parseBU(buf){   // EntidadeEnvelopeGenerico -> OCTET STRING(EntidadeBoletimUrna) -> identificacaoSecao{mun,zona,local,secao} + resultadosVotacaoPorEleicao[]
+  const b=new Uint8Array(buf); const outer=derIter(b,0)[0][1]; const inner=derIter(outer,0).find(x=>x[0]===0x04)[1]; const top=derIter(derIter(inner,0)[0][1],0);
+  let local=null; for(const [t,v] of top){ if(t===0x30){ const it=derIter(v,0); if(it.length===3&&it[0][0]===0x30&&it[1][0]===0x02&&it[2][0]===0x02){ local=ival(it[1][1]); break; } } }
+  const res={};
+  for(const [t,v] of top){ if(t!==0x30) continue; const items=derIter(v,0); if(!items.length||items[0][0]!==0x30) continue;
+    for(const [t2,v2] of items){ if(t2!==0x30) continue; const it=derIter(v2,0); if(!it.length||it[0][0]!==0x02) continue; const ide=String(ival(it[0][1])); if(!["6257","6258","6259","6260"].includes(ide)) continue;
+      const r={aptos:(it.length>1&&it[1][0]===0x02)?ival(it[1][1]):0, comp:0, b:0, n:0, c:{}};
+      const walk=(node)=>{ for(const [t3,v3] of derIter(node,0)){ if(t3!==0x30) continue; const sub=derIter(v3,0);
+        if(sub.length>=2&&sub[0][0]===0x81&&sub[1][0]===0x82){ const tipo=sub[0][1][0], qtd=ival(sub[1][1]); const ident=sub.find(x=>x[0]===0xa3); if(ident){ const pc=derIter(ident[1],0); const cod=String(ival(pc[pc.length-1][1])); r.c[cod]=(r.c[cod]||0)+qtd; } else if(tipo===2) r.b+=qtd; else if(tipo===3) r.n+=qtd; }
+        else { if(sub.length>=2&&sub[0][0]===0x0a&&sub[1][0]===0x02&&r.comp===0) r.comp=ival(sub[1][1]); walk(v3); } } };
+      for(const [t3,v3] of it.slice(1)) if(t3===0x30) walk(v3);
+      res[ide]=r; } }
+  return {local, ele:res};
+}
+async function fetchRetry(url, signal, json){ let last=null; for(let i=0;i<4;i++){ try{ const r=await fetch(url,{signal,cache:"force-cache"}); if(r.status===429){ await new Promise(z=>setTimeout(z, 800*(i+1)+Math.random()*500)); continue; } if(!r.ok) throw new Error("HTTP "+r.status); return json? r.json() : r.arrayBuffer(); }catch(e){ if(signal.aborted) throw e; last=e; if(String(e).includes("HTTP 404")) throw e; await new Promise(z=>setTimeout(z, 400*(i+1))); } } throw last; }
+async function fetchSecLive(uf, cd){
+  const t=TURNO, S=SECS[t]; const lv=LVS[uf]?.mun?.[cd]; if(!lv||!S[uf]) return;
+  const key=t+":"+uf+":"+cd; if(LIVE[key]&&LIVE[key].running) return;
+  const M=S[uf].mun; M[cd]=M[cd]||{};
+  const jobs=[]; for(const L of Object.values(lv.loc)) for(const [z,ss] of Object.entries(L[6])) for(const s of ss){ if(!M[cd][z]?.[String(s)] && !(LIVE[key]?.miss?.has(z+"-"+s))) jobs.push([z,s]); }
+  if(!jobs.length) return;
+  const ctl=new AbortController(); const st=LIVE[key]={done:0,total:jobs.length,running:true,ctl,miss:LIVE[key]?.miss||new Set()};
+  const pres=ELE[t].pres, P="p00"+PLEITO[t], m5=String(cd).padStart(5,"0"); let i=0, lastPaint=Date.now();
+  const repaint=()=>{ S[uf].fetchedAt=new Date().toISOString(); delete LOCAGG[key]; if(TURNO===t&&mapLevel==="loc"&&mapUF===uf&&mapMun===cd){ paintMap(); renderSide(); } };
+  const worker=async()=>{ while(i<jobs.length && !ctl.signal.aborted){ const [z,s]=jobs[i++]; const z4=String(z).padStart(4,"0"), s4=String(s).padStart(4,"0"); const dir=`${BU_BASE}/${PLEITO[t]}/dados/${uf}/${m5}/${z4}/${s4}`;
+      try{ const aux=await fetchRetry(`${dir}/${P}-${uf}-m${m5}-z${z4}-s${s4}-aux.json`, ctl.signal, true);
+        const h=(aux.hashes||[]).find(x=>x.st==="Totalizado")||(aux.hashes||[])[0]; const bu=h&&(h.arq||[]).find(a=>a.tp==="bu"); if(!bu) throw new Error("sem BU");
+        const p=parseBU(await fetchRetry(`${dir}/${h.hash}/${bu.nm}`, ctl.signal, false)); const pr=p.ele[pres]; if(!pr) throw new Error("sem presidente");
+        const rec=[p.local, pr.aptos, pr.comp, pr.b, pr.n, Object.entries(pr.c).sort((a,b)=>b[1]-a[1])]; const gov=p.ele[ELE[t].gov]; if(gov) rec.push([gov.b,gov.n,Object.entries(gov.c).sort((a,b)=>b[1]-a[1])]);
+        (M[cd][z]=M[cd][z]||{})[String(s)]=rec; st.done++;
+      }catch(e){ if(ctl.signal.aborted) return; st.miss.add(z+"-"+s); st.done++; }
+      if(Date.now()-lastPaint>1500){ lastPaint=Date.now(); repaint(); } } };
+  await Promise.all(Array.from({length:8},worker));
+  st.running=false; repaint();
+}
+function liveStatus(){ const st=LIVE[TURNO+":"+mapUF+":"+mapMun]; return st&&st.running? ` · lendo boletins direto do TSE... ${st.done} de ${st.total}` : ""; }
+function stopLive(){ for(const k in LIVE){ if(LIVE[k].running){ LIVE[k].ctl.abort(); LIVE[k].running=false; } } }
+function afterLoc(uf, cd){ const A=munLocais(uf,cd); if(A && A.done<A.total) fetchSecLive(uf,cd); }
 /* agrega seções por local e por bairro para um município: {locais:[...], bairros:[...], done, total, cands:{cod:votos}} */
 function munLocais(uf, cd){
   const key=TURNO+":"+uf+":"+cd; if(LOCAGG[key]) return LOCAGG[key];
@@ -786,8 +831,9 @@ function munLocais(uf, cd){
 }
 async function loadLoc(uf, cd){
   await Promise.all([ensureLV(uf), ensureSEC(uf)]);
-  if(mapLevel==="loc" && mapUF===uf && mapMun===cd){ await renderMap(); }
+  if(mapLevel==="loc" && mapUF===uf && mapMun===cd){ await renderMap(); afterLoc(uf, cd); }
 }
+
 function locFill(agg){ return fillFor(agg.top.map(([k,v])=>[k,v]), agg.vv); }
 function tipLoc(nr){
   const A=munLocais(mapUF,mapMun); const l=A?.byNr?.[nr]; if(!l) return "";
@@ -851,15 +897,38 @@ async function renderLocMap(box){
   let svg="";
   if(feat) svg+=`<path d="${pathD(feat.geometry,p)}" data-id="${esc(feat.properties.id)}" class="munfill" fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.2" stroke-opacity=".5"/>`;
   const maxTe=Math.max(1,...pts.map(l=>l.te));
-  const circles=pts.map(l=>{ const [x,y]=p([l.lon,l.lat]); if(x<-50||x>1050||y<-50||y>H+50) return ""; const r=3+Math.sqrt(l.te/maxTe)*(pts.length>400?9:pts.length>120?13:18); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" data-nr="${esc(l.nr)}" fill="var(--cx)" stroke="var(--surface)" stroke-width="1"/>`; }).join("");
-  box.innerHTML=`<svg viewBox="0 0 1000 ${H}" role="img" aria-label="Mapa do município">${svg}<g id="loccircles">${circles}</g><g class="lbls" id="maplbls"></g></svg><div class="tip" id="tip" hidden></div>`;
-  box._fc=null; box._loc={p,H,pts,feat};
+  const vis=pts.map(l=>{ const [x,y]=p([l.lon,l.lat]); return {l,x,y}; }).filter(o=>o.x>=-50&&o.x<=1050&&o.y>=-50&&o.y<=H+50);
+  const areaMode = locView==="area" || (locView==="auto" && vis.length<=700);
+  const circles=vis.map(({l,x,y})=>{ const r=3+Math.sqrt(l.te/maxTe)*(vis.length>400?9:vis.length>120?13:18); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(areaMode? Math.max(2.2,r*0.45) : r).toFixed(1)}" data-nr="${esc(l.nr)}" fill="var(--cx)" stroke="var(--surface)" stroke-width="1"/>`; }).join("");
+  let cells="";
+  if(areaMode && vis.length>1){
+    const vc=voronoiCells(vis.map(({l,x,y})=>({nr:l.nr,x,y})), W, H);
+    cells=`<defs><clipPath id="munclip">${feat?`<path d="${pathD(feat.geometry,p)}"/>`:`<rect x="0" y="0" width="${W}" height="${H}"/>`}</clipPath></defs><g id="loccells" clip-path="url(#munclip)">`+vc.map(c=>c.poly.length>=3?`<path class="cell" d="${c.poly.map((q,i)=>(i?"L":"M")+q[0].toFixed(1)+","+q[1].toFixed(1)).join("")}Z" data-nr="${esc(c.nr)}" fill="var(--sunk)" stroke="var(--surface)" stroke-width=".6"/>`:"").join("")+`</g>`;
+  }
+  box.innerHTML=`<svg viewBox="0 0 1000 ${H}" role="img" aria-label="Mapa do município">${svg}${cells}<g id="loccircles">${circles}</g><g class="lbls" id="maplbls"></g></svg><div class="tip" id="tip" hidden></div>`;
+  box._fc=null; box._loc={p,H,pts,feat,areaMode};
   const tip=document.getElementById("tip");
-  box.querySelectorAll("circle").forEach(c=>{
+  box.querySelectorAll("circle, path.cell").forEach(c=>{
     c.addEventListener("mousemove",e=>{ tip.innerHTML=tipLoc(c.dataset.nr); tip.hidden=false; const r=box.getBoundingClientRect(); let x=e.clientX-r.left+14, y=e.clientY-r.top+14; if(x+270>r.width) x=e.clientX-r.left-270; if(y+160>r.height) y=Math.max(0,e.clientY-r.top-170); tip.style.left=x+"px"; tip.style.top=y+"px"; });
     c.addEventListener("mouseleave",()=>{tip.hidden=true});
     c.addEventListener("click",()=>goLoc(c.dataset.nr));
   });
+}
+/* células de Voronoi por recorte de semiplanos (vizinhos mais próximos primeiro, com parada antecipada) */
+function voronoiCells(pts, W, H){
+  const cells=[]; const n=pts.length;
+  for(let i=0;i<n;i++){ const p=pts[i]; let poly=[[0,0],[W,0],[W,H],[0,H]];
+    const others=[]; for(let j=0;j<n;j++){ if(j===i) continue; const q=pts[j]; others.push({q,d:(q.x-p.x)**2+(q.y-p.y)**2}); }
+    others.sort((a,b)=>a.d-b.d);
+    for(const {q,d} of others){
+      let maxR=0; for(const [x,y] of poly){ const r=(x-p.x)**2+(y-p.y)**2; if(r>maxR) maxR=r; }
+      if(d/4>maxR) break;                       // bissetor mais longe que qualquer vértice: não corta mais
+      const ax=q.x-p.x, ay=q.y-p.y, c=d/2; const out=[];
+      for(let k=0;k<poly.length;k++){ const A=poly[k], B=poly[(k+1)%poly.length]; const fa=(A[0]-p.x)*ax+(A[1]-p.y)*ay-c, fb=(B[0]-p.x)*ax+(B[1]-p.y)*ay-c;
+        if(fa<=0) out.push(A); if((fa<0&&fb>0)||(fa>0&&fb<0)){ const t=fa/(fa-fb); out.push([A[0]+t*(B[0]-A[0]), A[1]+t*(B[1]-A[1])]); } }
+      poly=out; if(poly.length<3) break; }
+    cells.push({nr:p.nr, poly}); }
+  return cells;
 }
 function goLoc(nr){ mapLoc = (mapLoc===nr? null : nr); mapBairro=null; paintMap(); renderCrumb(); renderSide(); }
 function goBairro(nm){ mapBairro = (mapBairro===nm? null : nm); mapLoc=null; paintMap(); renderCrumb(); renderSide(); }
@@ -868,16 +937,19 @@ function paintLoc(){
   const A=munLocais(mapUF,mapMun); const leaders={}; let te=0;
   box.querySelectorAll("circle").forEach(c=>{ const l=A?.byNr?.[c.dataset.nr]; const f=l&&l.agg.done? locFill(l.agg):{bg:"var(--cx)",n:null};
     const dim = (mapBairro && l && l.bairro!==mapBairro) || (mapLoc && c.dataset.nr!==mapLoc);
-    c.setAttribute("fill", f.n? f.bg : "var(--cx)"); c.style.opacity = dim? .18 : (f.n? .92 : .55); c.classList.toggle("sel", mapLoc===c.dataset.nr);
+    c.setAttribute("fill", L.areaMode? (f.n? col(f.n) : "var(--cx)") : (f.n? f.bg : "var(--cx)")); c.style.opacity = dim? .18 : (f.n? (L.areaMode? .9 : .92) : .55); c.classList.toggle("sel", mapLoc===c.dataset.nr);
     if(f.n){ leaders[f.n]=leaders[f.n]||{n:0,w:0}; leaders[f.n].n++; leaders[f.n].w+=l.te; te+=l.te; } });
+  box.querySelectorAll("path.cell").forEach(c=>{ const l=A?.byNr?.[c.dataset.nr]; const f=l&&l.agg.done? locFill(l.agg):{bg:"var(--sunk)",n:null};
+    const dim = (mapBairro && l && l.bairro!==mapBairro) || (mapLoc && c.dataset.nr!==mapLoc);
+    c.setAttribute("fill", f.bg); c.style.opacity = dim? .2 : 1; c.classList.toggle("sel", mapLoc===c.dataset.nr); });
   const path=box.querySelector("path.munfill"); const mm=MUN[mapUF]?.mun?.[mapMun]; if(path && mm){ const f=fillFor(mm.top,mm.vv); path.setAttribute("fill", f.n? `color-mix(in oklab, ${col(f.n)} 14%, var(--surface))` : "var(--sunk)"); }
   // rótulos: bairros maiores (centroide dos seus locais)
   const g=document.getElementById("maplbls"); if(g && A){
     const top=A.bairros.filter(b=>b.ng).slice(0,8);
     g.innerHTML=top.map(b=>{ const [x,y]=L.p([b.lon,b.lat]); const t=b.top[0]; const ln2=b.done&&t? `${cname(mapUF,t[0]).split(" ").slice(-1)[0]} ${f1.format(100*t[1]/(b.vv||1))}%`:""; const nm=tc(b.nm); return `<g class="lbl md ${mapBairro&&mapBairro!==b.nm?'dim':''}"><text class="sg" x="${x.toFixed(1)}" y="${(y-4).toFixed(1)}" text-anchor="middle" font-size="11">${esc(nm.length>18?nm.slice(0,17)+"…":nm)}</text>${ln2?`<text class="pc" x="${x.toFixed(1)}" y="${(y+7).toFixed(1)}" text-anchor="middle" font-size="9">${esc(ln2)}</text>`:""}</g>`; }).join(""); }
-  document.getElementById("maplegend").innerHTML = Object.entries(leaders).sort((a,b)=>b[1].w-a[1].w).map(([n,v])=>`<span><i style="background:${col(n)}"></i>${esc(cname(mapUF,n))} lidera em ${v.n} local(is) · ${f1.format(100*v.w/(te||1))}% dos eleitores com boletim</span>`).join("") + `<span><i style="background:var(--cx)"></i>local sem boletim lido</span><span class="muted">círculo = local de votação (área ∝ eleitores)</span>`;
+  document.getElementById("maplegend").innerHTML = Object.entries(leaders).sort((a,b)=>b[1].w-a[1].w).map(([n,v])=>`<span><i style="background:${col(n)}"></i>${esc(cname(mapUF,n))} lidera em ${v.n} local(is) · ${f1.format(100*v.w/(te||1))}% dos eleitores com boletim</span>`).join("") + `<span><i style="background:var(--cx)"></i>local sem boletim lido</span><span class="muted">${L.areaMode?"área = região mais próxima de cada local de votação (aproximação); ponto = o local":"círculo = local de votação (área ∝ eleitores)"}</span>`;
   const sd=SECS[TURNO][mapUF]; const nog=(A?A.locais.length-L.pts.length:0);
-  document.getElementById("mapnote").textContent = A ? `${esc(tc(mm?.nm||""))}: ${A.locais.length} locais de votação · ${A.done} de ${A.total} seções com boletim de urna${sd?.fetchedAt?` (leitura ${new Date(sd.fetchedAt).toLocaleTimeString("pt-BR")})`:""}${nog?` · ${nog} local(is) sem coordenada no TSE (só na lista)`:""}. Clique num local para ver as seções; clique num bairro na lista para destacar.` : (LVS[mapUF]===null? `Locais de votação deste estado ainda não foram publicados neste painel.` : `Carregando locais de votação…`);
+  document.getElementById("mapnote").textContent = A ? `${esc(tc(mm?.nm||""))}: ${A.locais.length} locais de votação · ${A.done} de ${A.total} seções com boletim de urna${liveStatus()}${sd?.fetchedAt?` (leitura ${new Date(sd.fetchedAt).toLocaleTimeString("pt-BR")})`:""}${nog?` · ${nog} local(is) sem coordenada no TSE (só na lista)`:""}. Clique num local para ver as seções; clique num bairro na lista para destacar.` : (LVS[mapUF]===null? `Locais de votação deste estado ainda não foram publicados neste painel.` : `Carregando locais de votação…`);
 }
 function gainer(r){ if(!r||r.swing==null||!r.c1||!r.s.vv) return null; const up=r.swing>=0; return {n: up? r.c1[0] : (r.c2?r.c2[0]:r.c1[0]), pp: Math.abs(r.swing), nm: short((up? r.c1 : (r.c2||r.c1))[1]).split(" ").slice(-1)[0]}; }
 function paintLabels(){
@@ -940,9 +1012,11 @@ function renderCrumb(){
   c.innerHTML=h; document.getElementById("crumbBR").onclick=goBR; const cu=document.getElementById("crumbUF"); if(cu) cu.onclick=backToUF;
   const ch=document.getElementById("regchips");
   if(mapLevel==="loc"){ ch.innerHTML=`<button type="button" class="chip-btn" id="backUF">← ${esc(UFN[mapUF])}</button>`+((mapLoc||mapBairro)?` <button type="button" class="chip-btn" id="backMun">← ${esc(munName(mapUF,mapMun))}</button>`:"")
-      + `<span class="muted" style="margin:0 6px">·</span>` + [["urb","Área urbana"],["all","Município inteiro"]].map(([k,n])=>`<button type="button" class="chip-btn ${locZoom===k?'on':''}" data-z="${k}">${n}</button>`).join("");
+      + `<span class="muted" style="margin:0 6px">·</span>` + [["urb","Área urbana"],["all","Município inteiro"]].map(([k,n])=>`<button type="button" class="chip-btn ${locZoom===k?'on':''}" data-z="${k}">${n}</button>`).join("")
+      + `<span class="muted" style="margin:0 6px">·</span>` + [["area","Áreas"],["pts","Pontos"]].map(([k,n])=>{ const on = locView===k || (locView==="auto" && ((document.getElementById("mapbox")._loc?.areaMode)? k==="area" : k==="pts")); return `<button type="button" class="chip-btn ${on?'on':''}" data-v="${k}">${n}</button>`; }).join("");
     document.getElementById("backUF").onclick=backToUF; const bm=document.getElementById("backMun"); if(bm) bm.onclick=()=>{mapLoc=null;mapBairro=null;paintMap();renderCrumb();renderSide();};
-    ch.querySelectorAll("button[data-z]").forEach(b=>b.onclick=()=>{ locZoom=b.dataset.z; renderMap(); }); return; }
+    ch.querySelectorAll("button[data-z]").forEach(b=>b.onclick=()=>{ locZoom=b.dataset.z; renderMap(); });
+    ch.querySelectorAll("button[data-v]").forEach(b=>b.onclick=()=>{ locView=b.dataset.v; renderMap(); }); return; }
   if(mapLevel==="br"){ ch.innerHTML=[["ALL","Todas as regiões"],...Object.keys(REG).filter(k=>k!=="EX").map(k=>[k,REGN[k]])].map(([k,n])=>`<button type="button" class="chip-btn ${mapRegion===k?'on':''}" data-r="${k}">${n}</button>`).join("")
       + (TURNO===2 ? `<span class="muted" style="margin:0 6px">·</span>` + [["atual","Resultado do 2º turno"],["swing","Variação vs. 1º turno"]].map(([k,n])=>`<button type="button" class="chip-btn ${mapMode===k?'on':''}" data-m="${k}">${n}</button>`).join("") : "");
     ch.querySelectorAll("button[data-r]").forEach(b=>b.onclick=()=>{mapRegion=b.dataset.r; renderCrumb(); paintMap(); renderSide();});
