@@ -785,14 +785,15 @@ function parseBU(buf){   // EntidadeEnvelopeGenerico -> OCTET STRING(EntidadeBol
       res[ide]=r; } }
   return {local, ele:res};
 }
-async function fetchRetry(url, signal, json){ let last=null; for(let i=0;i<4;i++){ try{ const r=await fetch(url,{signal,cache:"force-cache"}); if(r.status===429){ await new Promise(z=>setTimeout(z, 800*(i+1)+Math.random()*500)); continue; } if(!r.ok) throw new Error("HTTP "+r.status); return json? r.json() : r.arrayBuffer(); }catch(e){ if(signal.aborted) throw e; last=e; if(String(e).includes("HTTP 404")) throw e; await new Promise(z=>setTimeout(z, 400*(i+1))); } } throw last; }
+async function fetchRetry(url, signal, json){ let last=null; for(let i=0;i<6;i++){ try{ const r=await fetch(url,{signal,cache:"force-cache"}); if(r.status===429){ last=new Error("HTTP 429"); await new Promise(z=>setTimeout(z, Math.min(1500*(i+1),8000)+Math.random()*600)); continue; } if(!r.ok) throw new Error("HTTP "+r.status); return json? r.json() : r.arrayBuffer(); }catch(e){ if(signal.aborted) throw e; last=e; if(String(e).includes("HTTP 404")) throw e; await new Promise(z=>setTimeout(z, 400*(i+1))); } } throw last; }
 async function fetchSecLive(uf, cd){
   const t=TURNO, S=SECS[t]; const lv=LVS[uf]?.mun?.[cd]; if(!lv||!S[uf]) return;
   const key=t+":"+uf+":"+cd; if(LIVE[key]&&LIVE[key].running) return;
   const M=S[uf].mun; M[cd]=M[cd]||{};
-  const jobs=[]; for(const L of Object.values(lv.loc)) for(const [z,ss] of Object.entries(L[6])) for(const s of ss){ if(!M[cd][z]?.[String(s)] && !(LIVE[key]?.miss?.has(z+"-"+s))) jobs.push([z,s]); }
+  const per=[]; for(const L of Object.values(lv.loc)){ const a=[]; for(const [z,ss] of Object.entries(L[6])) for(const s of ss){ if(!M[cd][z]?.[String(s)]) a.push([z,s]); } if(a.length) per.push(a); }
+  const jobs=[]; for(let k=0, more=true; more; k++){ more=false; for(const a of per) if(k<a.length){ jobs.push(a[k]); if(k+1<a.length) more=true; } }   // intercala: 1 seção de cada local primeiro, para o mapa inteiro ganhar cor logo
   if(!jobs.length) return;
-  const ctl=new AbortController(); const st=LIVE[key]={done:0,total:jobs.length,running:true,ctl,miss:LIVE[key]?.miss||new Set()};
+  const ctl=new AbortController(); const st=LIVE[key]={done:0,total:jobs.length,running:true,ctl,miss:new Set()};   // seções que falharam voltam a ser tentadas ao reabrir o município
   const pres=ELE[t].pres, P="p00"+PLEITO[t], m5=String(cd).padStart(5,"0"); let i=0, lastPaint=Date.now();
   const repaint=()=>{ S[uf].fetchedAt=new Date().toISOString(); delete LOCAGG[key]; if(TURNO===t&&mapLevel==="loc"&&mapUF===uf&&mapMun===cd){ paintMap(); renderSide(); } };
   const worker=async()=>{ while(i<jobs.length && !ctl.signal.aborted){ const [z,s]=jobs[i++]; const z4=String(z).padStart(4,"0"), s4=String(s).padStart(4,"0"); const dir=`${BU_BASE}/${PLEITO[t]}/dados/${uf}/${m5}/${z4}/${s4}`;
