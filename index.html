@@ -43,6 +43,11 @@ button{font:inherit;color:inherit}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
 .dot.live{background:var(--ok);box-shadow:0 0 0 0 color-mix(in oklab,var(--ok) 60%,transparent);animation:pulse 2s infinite}
 .dot.stale{background:var(--warn)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:var(--surface);padding:2px;gap:2px}
+.seg button{border:0;background:transparent;border-radius:999px;padding:4px 12px;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--muted);white-space:nowrap}
+.seg button small{font-weight:400;font-size:11px;margin-left:4px;opacity:.8}
+.seg button.on{background:var(--ink);color:var(--surface)}
+.seg button:not(.on):hover{color:var(--ink)}
 @keyframes pulse{70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
 @media (prefers-reduced-motion:reduce){.dot.live{animation:none}}
 
@@ -206,7 +211,11 @@ footer a{color:var(--accent)}
   <header class="top">
     <div class="brand">
       <h1>Apuração 2026</h1>
-      <span class="sub">2º turno · 25 de outubro · Presidente e Governadores (AC, AM, DF, ES, RN, TO) · ao vivo, direto do TSE</span>
+      <span class="sub" id="subTitle">2º turno · 25 de outubro · Presidente e Governadores (AC, AM, DF, ES, RN, TO) · ao vivo, direto do TSE</span>
+    </div>
+    <div class="seg" id="turnoSeg" role="group" aria-label="Escolher turno">
+      <button type="button" class="on" data-t="2" aria-pressed="true">2º turno <small>25/10</small></button>
+      <button type="button" data-t="1" aria-pressed="false">1º turno <small>04/10</small></button>
     </div>
     <div class="status" id="status"></div>
   </header>
@@ -288,7 +297,7 @@ footer a{color:var(--accent)}
       <th data-k="mpp" class="n">Vantagem</th>
       <th data-k="stRank">Situação</th>
       <th data-k="gov">Governador · líder</th>
-      <th data-k="t1lead" class="n">1º turno (2 cand.)</th>
+      <th data-k="t1lead" class="n" id="thCmp">1º turno (2 cand.)</th>
       <th data-k="comp" class="n">Compar.</th>
     </tr></thead><tbody></tbody></table></div>
   </section>
@@ -334,7 +343,15 @@ const LOW = new Set(["da","de","do","das","dos","e"]);
 const tc = s => String(s||"").toLowerCase().split(/\s+/).map((w,i)=>i>0&&LOW.has(w)?w:w.charAt(0).toUpperCase()+w.slice(1)).join(" ");
 const short = s => tc(String(s||"").replace(/^ESCRITOR\s+/i,"").replace(/^VETERIN[AÁ]RIO\s+/i,""));
 
+/* Turnos: a eleição mais recente é o padrão; o 1º turno (resultado final) fica disponível no seletor do topo. */
+const ELE = {1:{pres:"6257",gov:"6259",sen:"6259",govUFs:UFS,label:"1º turno",dia:"04/10",sub:"1º turno · 4 de outubro · Presidente, Governadores e Senado"},
+             2:{pres:"6258",gov:"6260",sen:null,govUFs:["ac","am","df","es","rn","to"],label:"2º turno",dia:"25/10",sub:"2º turno · 25 de outubro · Presidente e Governadores (AC, AM, DF, ES, RN, TO)"}};
+const LATEST = 2;                       // turno mais recente = padrão
+const SUBFX = " · ao vivo, direto do TSE";                       // sufixo do subtítulo (a versão pública acrescenta "· ao vivo, direto do TSE")
+const SNAPS = {1:null, 2:null}, VIAS = {1:"embutido", 2:"embutido"};
+let TURNO = (EMBED && EMBED.turno) || LATEST;
 let SNAP = EMBED, VIA = "embutido", sel = "sp", sortK = "w", sortDir = -1, showAll = false;
+if(EMBED){ SNAPS[TURNO] = EMBED; }
 
 /* ---------- cálculo ---------- */
 /* 1º turno (04/10, 100% das seções): por UF [aptos, válidos, votos 22 Bolsonaro, votos 13 Lula, comparecimento] */
@@ -344,6 +361,7 @@ function t1two(u, n){ const t=t1(u); if(!t) return null; return n==="22"? t.twoB
 function compute(snap){
   const P = snap.pres || {}, G = snap.gov || {};
   const br = P.br || {};
+  const cmp = (snap.turno||1) === 2;   // comparação com o 1º turno só faz sentido olhando o 2º
   const natRate = br.est ? br.vv/br.est : 0.75;
   const ufs = [...UFS, "zz"].filter(u => P[u]);
   const teTot = ufs.reduce((a,u)=>a+(P[u].te||0),0) || br.te || 1;
@@ -383,7 +401,7 @@ function compute(snap){
     return {u, name:UFN[u], reg:Object.keys(REG).find(k=>REG[k].includes(u)), s, te:s.te||0, w:100*(s.te||0)/teTot, pst:s.pst||0,
       c1, c2, sh1: vv&&c1?100*c1[3]/vv:0, sh2: vv&&c2?100*c2[3]/vv:0, mv, mpp, remE, remV, rate, st, cls, stRank:rank,
       lead: c1? short(c1[1]):"", gov, govName: gov? short(gov.g1[1]):"", comp, bnp, sen, senNames: sen? sen.top.slice(0,2).map(c=>short(c[1])).join(" · "):"",
-      t1: t1(u), t1lead: (c1&&t1two(u,c1[0])!=null)? t1two(u,c1[0]) : -1, swing: (c1&&vv&&t1two(u,c1[0])!=null)? (100*c1[3]/vv - t1two(u,c1[0])) : null};
+      t1: cmp? t1(u):null, t1lead: (cmp&&c1&&t1two(u,c1[0])!=null)? t1two(u,c1[0]) : -1, swing: (cmp&&c1&&vv&&t1two(u,c1[0])!=null)? (100*c1[3]/vv - t1two(u,c1[0])) : null};
   });
   // acumulado por peso
   [...rows].sort((a,b)=>b.te-a.te).reduce((acc,r)=>{r.cum=acc+r.w;return r.cum},0);
@@ -444,10 +462,31 @@ function renderStatus(){
   const br=D.nat, m=(Date.now()-new Date(SNAP.fetchedAt||0).getTime())/60000;
   const live = (VIA!=="embutido") && m<8;
   const viaTxt = {embutido:"versão publicada", db:"atualização automática", navegador:"navegador do app", tse:"direto do TSE", servidor:"TSE via servidor"}[VIA]||VIA;
-  document.getElementById("status").innerHTML =
-    `<span class="pill"><span class="dot ${live?"live":(m<20?"":"stale")}"></span>TSE ${esc((br.h||"").slice(11))} · ${esc(viaTxt)} ${esc(ago(SNAP.fetchedAt))}</span>`+
-    `<span class="pill num">${f2.format(br.pst||0)}% das seções</span>`;
+  const final = (br.pst||0)>=100 || br.tf==="s";
+  document.getElementById("status").innerHTML = final
+    ? `<span class="pill"><span class="dot" style="background:var(--ok)"></span>Resultado final · TSE ${esc(br.h||"")}</span><span class="pill num">100% das seções</span>`
+    : `<span class="pill"><span class="dot ${live?"live":(m<20?"":"stale")}"></span>TSE ${esc((br.h||"").slice(11))} · ${esc(viaTxt)} ${esc(ago(SNAP.fetchedAt))}</span>`+
+      `<span class="pill num">${f2.format(br.pst||0)}% das seções</span>`;
 }
+function setTurno(t){
+  t=+t; if(t===TURNO || !ELE[t]) return;
+  TURNO=t; SNAP=SNAPS[t]; VIA=VIAS[t]||"embutido";
+  document.querySelectorAll("#turnoSeg button").forEach(b=>{ const on=+b.dataset.t===t; b.classList.toggle("on",on); b.setAttribute("aria-pressed",on?"true":"false"); });
+  document.getElementById("subTitle").textContent = ELE[t].sub + SUBFX;
+  if(sortK==="t1lead"||sortK==="sen"){ sortK="w"; sortDir=-1; }
+  if(t!==2 && mapMode==="swing") mapMode="atual";
+  unsubMun(); MUN=MUNS[t]; ZON=ZONS[t];
+  const go=()=>{ render(); renderCrumb(); setFeedText();
+    if(mapLevel==="mun"&&mapUF){ paintMap(); renderSide(); ensureMun(mapUF).then(()=>{ if(TURNO!==t) return; paintMap(); renderSide(); if(mapMun){ const p=ensureZon(mapUF, mapMun); if(p&&p.then) p.then(()=>{ if(TURNO===t) renderSide(); }); } }); } };
+  if(SNAP){ go(); return; }
+  document.getElementById("natSub").textContent=`Carregando o ${ELE[t].label}…`; document.getElementById("status").innerHTML="";
+  loadTurno(t).then(()=>{ if(TURNO!==t) return; SNAP=SNAPS[t]; VIA=VIAS[t]||"embutido"; if(!SNAP){ document.getElementById("natSub").textContent=`Não consegui carregar o ${ELE[t].label}.`; return; } go(); });
+}
+/* fonte dos turnos anteriores (resultado final): arquivo publicado junto com a página */
+async function loadTurno(t){
+  await pollOnce(t);   // turno anterior: resultado final, lido uma vez do TSE
+}
+document.querySelectorAll("#turnoSeg button").forEach(b=>b.onclick=()=>setTurno(b.dataset.t));
 function renderNat(){
   const br=D.nat, vv=br.vv||0, cs=br.cands||[];
   document.getElementById("natPst").textContent = f2.format(br.pst||0)+"%";
@@ -469,12 +508,17 @@ function renderNat(){
     ["Comparecimento", f1.format(comp)+"%", `abstenção ${f1.format(100-comp)}% no apurado`],
     ["Brancos + nulos", f1.format(bn)+"%", `dos votos apurados`],
     ["Vantagem do 1º", mi(leadGap), cs[0]?`${esc(short(cs[0][1]))} sobre ${esc(short(cs[1]?.[1]||""))}`:""],
-    ["Vs. 1º turno (2 cand.)", (()=>{const t=cs[0]&&t1two("br",cs[0][0]); if(t==null||!vv) return "—"; const d=100*cs[0][3]/vv-t; return `${d>=0?"+":"−"}${f2.format(Math.abs(d))} pp`})(), cs[0]?`${esc(short(cs[0][1]))} tinha ${f1.format(t1two("br",cs[0][0])||0)}% entre os dois em 04/10`:""],
+    TURNO===2
+      ? ["Vs. 1º turno (2 cand.)", (()=>{const t=cs[0]&&t1two("br",cs[0][0]); if(t==null||!vv) return "—"; const d=100*cs[0][3]/vv-t; return `${d>=0?"+":"−"}${f2.format(Math.abs(d))} pp`})(), cs[0]?`${esc(short(cs[0][1]))} tinha ${f1.format(t1two("br",cs[0][0])||0)}% entre os dois em 04/10`:""]
+      : ["Para vencer no 1º turno", to50>0?`faltaram ${f2.format(to50)} pp`:`acima de 50%`, cs[0]?`${esc(short(cs[0][1]))} precisava de 50% + 1 dos válidos`:""],
   ].map(([k,v,s])=>`<div class="kpi"><div class="k">${k}</div><div class="v num">${v}</div><div class="s">${s}</div></div>`).join("");
   const pl = D.projList.slice(0,4);
-  document.getElementById("proj").innerHTML = `<h3>Projeção ponderada por estado</h3><p>Se os votos que faltam em cada estado seguirem a distribuição já apurada naquele estado. Útil quando a apuração avança em ritmos diferentes pelo país.</p>
+  const isFinal = (br.pst||0)>=100 || br.tf==="s";
+  document.getElementById("proj").innerHTML = `<h3>${isFinal?"Resultado por região":"Projeção ponderada por estado"}</h3><p>${isFinal?"Apuração encerrada: os percentuais abaixo são o resultado final dos válidos.":"Se os votos que faltam em cada estado seguirem a distribuição já apurada naquele estado. Útil quando a apuração avança em ritmos diferentes pelo país."}</p>
    <div class="mini">${pl.map(p=>`<span>${esc(short(p.nm))}</span><span class="bar"><i style="width:${Math.min(100,p.pc*1.6)}%;background:${col(p.n)}"></i></span><span class="num">${f2.format(p.pc)}%</span>`).join("")}</div>
-   <p style="margin:10px 0 0">${pl[0]? `Nesse cenário, <b>${esc(short(pl[0].nm))}</b> venceria com <b>${f2.format(pl[0].pc)}%</b> dos válidos (${f2.format(Math.abs(pl[0].pc-(pl[1]?.pc||0)))} pp de diferença).`:""}</p>
+   <p style="margin:10px 0 0">${pl[0]? (TURNO===2
+      ? `${isFinal?"":"Nesse cenário, "}<b>${esc(short(pl[0].nm))}</b> ${isFinal?"venceu":"venceria"} com <b>${f2.format(pl[0].pc)}%</b> dos válidos (${f2.format(Math.abs(pl[0].pc-(pl[1]?.pc||0)))} pp de diferença).`
+      : (pl[0].pc>50? `${isFinal?"":"Nesse cenário, "}<b>${esc(short(pl[0].nm))}</b> ${isFinal?"passou":"passa"} de 50% e ${isFinal?"venceu":"venceria"} no 1º turno.` : `${isFinal?"Ninguém passou":"Nesse cenário ninguém passa"} de 50%: <b>${esc(short(pl[0].nm))}</b> × <b>${esc(short(pl[1]?.nm||""))}</b> no 2º turno.`)):""}</p>
    <div class="mini" style="margin-top:12px;grid-template-columns:minmax(0,7.5em) minmax(0,1fr) auto">${D.regs.filter(r=>r.k!=="EX").map(r=>{const t=r.top[0];const vvr=r.vv||1;return `<span>${r.name}</span><span class="bar" title="peso ${f1.format(r.w)}%"><i style="width:${r.w*2.2}%;background:${t?col(t.n):"var(--cx)"}"></i></span><span class="num" style="font-size:12px">${f1.format(r.w)}% · ${t?esc(short(t.nm).split(" ").slice(-1)[0])+" "+f1.format(100*t.v/vvr)+"%":"—"}</span>`}).join("")}</div>
    <p class="note" style="margin:6px 0 0">Por região: peso no eleitorado · líder no apurado.</p>`;
 }
@@ -507,6 +551,7 @@ function renderLeft(){
 function renderTable(){
   const KEY={gov:"govName",sen:"senNames"}; const rows=[...D.rows].sort((a,b)=>{const kk=KEY[sortK]||sortK; const x=a[kk]??"",y=b[kk]??"";return (typeof x==="string"? x.localeCompare(y,"pt-BR"): (x-y))*sortDir});
   const mxw=Math.max(...D.rows.map(r=>r.w));
+  const th=document.getElementById("thCmp"); if(TURNO===2){ th.dataset.k="t1lead"; th.className="n"; th.textContent="1º turno (2 cand.)"; } else { th.dataset.k="sen"; th.className=""; th.textContent="Senado · 2 vagas"; }
   document.querySelector("#tbl tbody").innerHTML = rows.map(r=>{const g=r.gov;
     return `<tr data-u="${r.u}" class="${r.u===sel?"sel":""}">
     <td><b>${r.u==="zz"?"EX":r.u.toUpperCase()}</b> <span class="muted">${esc(r.name)}</span></td>
@@ -518,7 +563,9 @@ function renderTable(){
     <td class="n">${r.s.vv?f1.format(r.mpp)+" pp":"—"}</td>
     <td><span class="chip ${r.cls}">${r.st}</span></td>
     <td>${g?`${esc(short(g.g1[1]))} <span class="muted">(${esc(g.g1[2])})</span> <span class="mono">${f1.format(g.sh)}%</span> <span class="muted">· ${esc(g.gs)}</span>`:`<span class="muted">${r.u==="zz"?"não vota":"—"}</span>`}</td>
-    <td class="n">${r.t1&&r.c1&&r.s.vv?`<span class="mono">${f1.format(r.t1lead)}%</span> <span class="muted">${r.swing!=null?`(${r.swing>=0?"+":"−"}${f1.format(Math.abs(r.swing))} pp)`:""}</span>`:(r.t1?`<span class="muted">B ${f1.format(r.t1.twoB)} · L ${f1.format(r.t1.twoL)}</span>`:"—")}</td>
+    ${TURNO===2
+      ? `<td class="n">${r.t1&&r.c1&&r.s.vv?`<span class="mono">${f1.format(r.t1lead)}%</span> <span class="muted">${r.swing!=null?`(${r.swing>=0?"+":"−"}${f1.format(Math.abs(r.swing))} pp)`:""}</span>`:(r.t1?`<span class="muted">B ${f1.format(r.t1.twoB)} · L ${f1.format(r.t1.twoL)}</span>`:"—")}</td>`
+      : `<td>${r.sen?`${r.sen.top.slice(0,2).map(c=>`${esc(short(c[1]))} <span class="muted">${esc(c[2])}</span>`).join(" · ")}`:`<span class="muted">${r.u==="zz"?"não vota":"—"}</span>`}</td>`}
     <td class="n">${r.s.est?f1.format(r.comp)+"%":"—"}</td></tr>`}).join("");
   document.querySelectorAll("#tbl tbody tr").forEach(tr=>tr.onclick=()=>select(tr.dataset.u));
   document.querySelectorAll("#tbl th").forEach(th=>{th.setAttribute("aria-sort", th.dataset.k===sortK?(sortDir<0?"descending":"ascending"):"none")});
@@ -551,9 +598,10 @@ function renderDetail(){
     <p style="margin:12px 0 0"><span class="chip ${r.cls}">${r.st}</span> <span class="note">para presidente</span></p>
   </div>
   <div class="panel"><h2>Presidente em ${esc(r.u==="zz"?"exterior":r.u.toUpperCase())}</h2><div class="blist">${blist(s.cands,s.vv,6)}</div></div>
-  <div class="panel"><h2>Governador ${r.u==="zz"?"":"· "+r.u.toUpperCase()}</h2>${g?`<p class="note" style="margin:4px 0 0">${f2.format(g.g.pst||0)}% das seções · <b>${esc(g.gs)}</b></p><div class="blist">${blist(g.g.cands,g.g.vv,6)}</div>`:`<p class="note">${r.u==="zz"?"Eleitores no exterior votam só para presidente.":"Sem 2º turno para governador neste estado — decidido em 04/10."}</p>`}</div>
-  <div class="panel"><h2>Comparação com o 1º turno ${r.u==="zz"?"":"· "+r.u.toUpperCase()}</h2>${r.t1?(()=>{const t=r.t1; const rows=[["22","Flavio Bolsonaro",t.shB,t.twoB],["13","Lula",t.shL,t.twoL]].map(([n,nm,sh,two])=>{const now=(s.cands||[]).find(c=>c[0]===n); const nowSh=now&&s.vv?100*now[3]/s.vv:null; const d=nowSh!=null?nowSh-two:null; return `<div class="bl"><div class="t"><span><span class="sw" style="background:${col(n)}"></span> ${esc(nm)}</span><b>${nowSh!=null?f2.format(nowSh)+"%":"—"}</b></div><div class="x">1º turno: ${f1.format(sh)}% dos válidos · ${f1.format(two)}% entre os dois${d!=null?` · agora <b style="color:${d>=0?"var(--ok)":"var(--hot)"}">${d>=0?"+":"−"}${f1.format(Math.abs(d))} pp</b> sobre essa base`:""}</div></div>`}).join("");
-      return `<p class="note" style="margin:4px 0 0">No 1º turno, ${f1.format(t.others)}% dos válidos foram para outros candidatos; comparecimento ${f1.format(t.te?100*t.c/t.te:0)}%${s.est?` (agora ${f1.format(comp)}%)`:""}.</p><div class="blist">${rows}</div>`})():`<p class="note">Sem dados do 1º turno para esta unidade.</p>`}</div>`;
+  <div class="panel"><h2>Governador ${r.u==="zz"?"":"· "+r.u.toUpperCase()}</h2>${g?`<p class="note" style="margin:4px 0 0">${f2.format(g.g.pst||0)}% das seções · <b>${esc(g.gs)}</b></p><div class="blist">${blist(g.g.cands,g.g.vv,6)}</div>`:`<p class="note">${r.u==="zz"?"Eleitores no exterior votam só para presidente.":(TURNO===2?"Sem 2º turno para governador neste estado — decidido em 04/10.":"Sem dados de governador neste estado ainda.")}</p>`}</div>
+  ${TURNO!==2 ? `<div class="panel"><h2>Senado ${r.u==="zz"?"":"· "+r.u.toUpperCase()} · 2 vagas</h2>${r.sen?`<p class="note" style="margin:4px 0 0">${f2.format(r.sen.g.pst||0)}% das seções · os dois mais votados levam as vagas</p><div class="blist">${blist(r.sen.top,r.sen.vv,4)}</div>`:`<p class="note">${r.u==="zz"?"Eleitores no exterior votam só para presidente.":"Sem dados do Senado neste estado ainda."}</p>`}</div>` :
+  `<div class="panel"><h2>Comparação com o 1º turno ${r.u==="zz"?"":"· "+r.u.toUpperCase()}</h2>${r.t1?(()=>{const t=r.t1; const rows=[["22","Flavio Bolsonaro",t.shB,t.twoB],["13","Lula",t.shL,t.twoL]].map(([n,nm,sh,two])=>{const now=(s.cands||[]).find(c=>c[0]===n); const nowSh=now&&s.vv?100*now[3]/s.vv:null; const d=nowSh!=null?nowSh-two:null; return `<div class="bl"><div class="t"><span><span class="sw" style="background:${col(n)}"></span> ${esc(nm)}</span><b>${nowSh!=null?f2.format(nowSh)+"%":"—"}</b></div><div class="x">1º turno: ${f1.format(sh)}% dos válidos · ${f1.format(two)}% entre os dois${d!=null?` · agora <b style="color:${d>=0?"var(--ok)":"var(--hot)"}">${d>=0?"+":"−"}${f1.format(Math.abs(d))} pp</b> sobre essa base`:""}</div></div>`}).join("");
+      return `<p class="note" style="margin:4px 0 0">No 1º turno, ${f1.format(t.others)}% dos válidos foram para outros candidatos; comparecimento ${f1.format(t.te?100*t.c/t.te:0)}%${s.est?` (agora ${f1.format(comp)}%)`:""}.</p><div class="blist">${rows}</div>`})():`<p class="note">Sem dados do 1º turno para esta unidade.</p>`}</div>`}`;
 }
 function select(u){ sel=u; renderTreemap(); renderTable(); renderDetail(); document.getElementById("detailSec").scrollIntoView({behavior: matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth", block:"start"}); }
 document.querySelectorAll("#tbl th").forEach(th=>th.onclick=()=>{const k=th.dataset.k; if(sortK===k) sortDir*=-1; else {sortK=k; sortDir=(k==="name"||k==="lead"||k==="gov"||k==="sen")?1:-1} renderTable()});
@@ -586,14 +634,16 @@ function mergeSnap(base, inc){
 }
 function accept(snap, via){
   if(!snap||!snap.pres||!snap.pres.br) return false;
-  if(!snap.turno && via==="embutido") snap={...snap, turno:2};
-  const m=mergeSnap(SNAP, snap);
+  const t=snap.turno||1; if(!ELE[t]) return false;   // sem marca de turno = 1º turno; cada turno tem seu próprio snapshot, nunca se misturam
+  const m=mergeSnap(SNAPS[t], {...snap, turno:t});
   if(!m.gained) return false;
-  SNAP=m.snap; VIA=via; render(); return true;
+  SNAPS[t]=m.snap; VIAS[t]=via;
+  if(t===TURNO){ SNAP=m.snap; VIA=via; render(); }
+  return true;
 }
 
 /* ---------- feed: leitura direta dos arquivos públicos do TSE (CORS liberado) ---------- */
-const GOV2=["ac","am","df","es","rn","to"]; let DB=null, MCP=null, polling=false, pollErr=0, lastOk=null;
+let DB=null, MCP=null, polling=false, pollErr=0, lastOk=null;
 async function getJSON(u){ const r=await fetch(u+(u.includes("?")?"&":"?")+"_="+Date.now(),{cache:"no-store"}); if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); }
 function compactTSE(d){
   const s=d.s||{}, e=d.e||{}, v=d.v||{}, n=x=>parseInt(x,10)||0, p=x=>parseFloat(String(x||0).replace(",","."))||0;
@@ -602,32 +652,37 @@ function compactTSE(d){
   return {h:`${d.dg||""} ${d.hg||""}`.trim(), ht:`${d.dt||""} ${d.ht||""}`.trim(), pst:p(s.pstn||s.pst), te:n(e.te), est:n(e.est), c:n(e.c), a:n(e.a), vv:n(v.vv), vb:n(v.vb), vn:n(v.tvn), tf:d.tf||"n", cands};
 }
 let viaSrv=false;
-async function pollOnce(){
-  if(polling) return; polling=true;
-  try{ const r=await fetch("api/snapshot?_="+Math.floor(Date.now()/30000),{cache:"no-store"}); if(r.ok){ const j=await r.json(); if(j&&j.pres&&j.pres.br){ j.turno=2; accept(j,"servidor"); viaSrv=true; lastOk=Date.now(); pollErr=0; polling=false; setFeedText(); if(D) renderStatus(); return; } } }catch(e){}
+/* lê um turno inteiro do TSE: presidente (BR + UFs + exterior), governador e, no 1º turno, senado */
+async function pollOnce(t=LATEST){
+  if(polling) return; polling=true; const E=ELE[t];
+  if(t===LATEST){ try{ const r=await fetch("api/snapshot?_="+Math.floor(Date.now()/30000),{cache:"no-store"}); if(r.ok){ const j=await r.json(); if(j&&j.pres&&j.pres.br){ j.turno=t; accept(j,"servidor"); viaSrv=true; lastOk=Date.now(); pollErr=0; polling=false; setFeedText(); if(D) renderStatus(); return; } } }catch(e){} }
   viaSrv=false;
-  const next={pres:{},gov:{},sen:{},errors:[],turno:2,source:BASE};
-  const jobs=[["pres","br",`${BASE}/6258/dados/br/br-c0001-e006258-u.json`],
-    ...[...UFS,"zz"].map(u=>["pres",u,`${BASE}/6258/dados/${u}/${u}-c0001-e006258-u.json`]),
-    ...GOV2.map(u=>["gov",u,`${BASE}/6260/dados/${u}/${u}-c0003-e006260-u.json`])];
-  let i=0; const worker=async()=>{ while(i<jobs.length){ const [k,u,url]=jobs[i++]; try{ next[k][u]=compactTSE(await getJSON(url)); }catch(e){ next.errors.push(u); if(SNAP?.[k]?.[u]) next[k][u]=SNAP[k][u]; } } };
+  const next={pres:{},gov:{},sen:{},errors:[],turno:t,source:BASE};
+  const jobs=[["pres","br",`${BASE}/${E.pres}/dados/br/br-c0001-e00${E.pres}-u.json`],
+    ...[...UFS,"zz"].map(u=>["pres",u,`${BASE}/${E.pres}/dados/${u}/${u}-c0001-e00${E.pres}-u.json`]),
+    ...E.govUFs.map(u=>["gov",u,`${BASE}/${E.gov}/dados/${u}/${u}-c0003-e00${E.gov}-u.json`]),
+    ...(E.sen? UFS.map(u=>["sen",u,`${BASE}/${E.sen}/dados/${u}/${u}-c0005-e00${E.sen}-u.json`]) : [])];
+  const prev=SNAPS[t];
+  let i=0; const worker=async()=>{ while(i<jobs.length){ const [k,u,url]=jobs[i++]; try{ next[k][u]=compactTSE(await getJSON(url)); }catch(e){ next.errors.push(u); if(prev?.[k]?.[u]) next[k][u]=prev[k][u]; } } };
   await Promise.all(Array.from({length:6},worker));
   next.fetchedAt=new Date().toISOString();
-  if(next.pres.br){ accept(next,"tse"); lastOk=Date.now(); pollErr=0; } else pollErr++;
+  if(next.pres.br){ accept(next,"tse"); if(t===LATEST){ lastOk=Date.now(); pollErr=0; } } else if(t===LATEST) pollErr++;
   polling=false; setFeedText(); if(D) renderStatus();
 }
-function startPoll(){ pollOnce(); setInterval(pollOnce, 45000); document.addEventListener("visibilitychange",()=>{ if(!document.hidden) pollOnce(); }); }
+function startPoll(){ pollOnce(); setInterval(()=>pollOnce(LATEST), 45000); document.addEventListener("visibilitychange",()=>{ if(!document.hidden) pollOnce(LATEST); }); }
 function setFeedText(){
   const t=document.getElementById("feedText");
-  const parts=[`Os números vêm dos arquivos públicos de resultados do TSE (Presidente e Governador, 2º turno · 25/10). A comparação com o 1º turno usa o resultado final de 04/10 (100% das seções).`];
-  parts.push(lastOk? (viaSrv? `O servidor deste site lê o TSE a cada 30 segundos e entrega a mesma leitura para todo mundo; a página atualiza sozinha, sem recarregar.` : `Esta página está lendo os arquivos do TSE direto do seu navegador a cada 45 segundos e atualiza sozinha, sem recarregar.`) : (pollErr? `Não consegui ler o TSE agora (tentando de novo a cada 45 s); mostrando a última leitura disponível.` : `Lendo o TSE…`));
+  const parts=[TURNO===2 ? `Os números vêm dos arquivos públicos de resultados do TSE (Presidente e Governador, 2º turno · 25/10). A comparação com o 1º turno usa o resultado final de 04/10 (100% das seções).`
+                         : `Resultado final do 1º turno (04/10, 100% das seções): Presidente, Governadores e Senado, dos arquivos públicos do TSE. Use o seletor no topo para voltar ao 2º turno.`];
+  if(TURNO===LATEST) parts.push(lastOk? (viaSrv? `O servidor deste site lê o TSE a cada 30 segundos e entrega a mesma leitura para todo mundo; a página atualiza sozinha, sem recarregar.` : `Esta página está lendo os arquivos do TSE direto do seu navegador a cada 45 segundos e atualiza sozinha, sem recarregar.`) : (pollErr? `Não consegui ler o TSE agora (tentando de novo a cada 45 s); mostrando a última leitura disponível.` : `Lendo o TSE…`));
   parts.push(`Última leitura: ${SNAP?.fetchedAt? new Date(SNAP.fetchedAt).toLocaleString("pt-BR"):"—"}.`);
   t.textContent=parts.join(" ");
 }
 
 /* ---------- mapa interativo: Brasil → estado → município → zonas ---------- */
 const UFCODE={"11":"ro","12":"ac","13":"am","14":"rr","15":"pa","16":"ap","17":"to","21":"ma","22":"pi","23":"ce","24":"rn","25":"pb","26":"pe","27":"al","28":"se","29":"ba","31":"mg","32":"es","33":"rj","35":"sp","41":"pr","42":"sc","43":"rs","50":"ms","51":"mt","52":"go","53":"df"};
-const GEO={}, MUN={}, ZON={}; let mapLevel="br", mapUF=null, mapMun=null, mapRegion="ALL", mapMode="atual", munUnsub=null, zonUnsub=null, mapBusy=false;
+const GEO={}, MUNS={1:{},2:{}}, ZONS={1:{},2:{}}; let MUN=MUNS[TURNO], ZON=ZONS[TURNO];   // caches de município/zona por turno
+let mapLevel="br", mapUF=null, mapMun=null, mapRegion="ALL", mapMode="atual", munUnsub=null, zonUnsub=null, mapBusy=false;
 const munIdx={}; // uf -> {cdi: cd}
 function labelPoint(g,p){ // maior anel externo: centroide ponderado por área + bbox desse anel
   const rings = g.type==="Polygon" ? [g.coordinates[0]] : g.coordinates.map(poly=>poly[0]);
@@ -655,28 +710,30 @@ function regionOf(u){ return Object.keys(REG).find(k=>REG[k].includes(u)); }
 function munName(uf,cd){ const m=MUN[uf]?.mun?.[cd]; return m? tc(m.nm):cd; }
 function cname(uf,n){ const nm=(MUN[uf]?.nomes||ZON[uf]?.nomes||{})[n]; return nm? short(nm) : (D?.br?.cands||[]).filter(c=>c[0]===n).map(c=>short(c[1]))[0]||("nº "+n); }
 
-let MUNCFG=null;
-async function munConfig(){ if(MUNCFG) return MUNCFG; const cfg=await getJSON(`${BASE}/6258/config/mun-e006258-cm.json`); MUNCFG={}; (cfg.abr||[]).forEach(a=>{ MUNCFG[String(a.cd).toLowerCase()]=a.mu||[]; }); return MUNCFG; }
+const MUNCFG={};
+async function munConfig(t){ if(MUNCFG[t]) return MUNCFG[t]; const E=ELE[t]; const cfg=await getJSON(`${BASE}/${E.pres}/config/mun-e00${E.pres}-cm.json`); const m={}; (cfg.abr||[]).forEach(a=>{ m[String(a.cd).toLowerCase()]=a.mu||[]; }); MUNCFG[t]=m; return m; }
 function compactMun(d, nomes){ const s=d.s||{}, e=d.e||{}, v=d.v||{}, n=x=>parseInt(x,10)||0, p=x=>parseFloat(String(x||0).replace(",","."))||0; const c=[];
   (d.carg||[]).forEach(cg=>(cg.agr||[]).forEach(a=>(a.par||[]).forEach(pa=>(pa.cand||[]).forEach(x=>{ if(nomes) nomes[x.n]=x.nmu; c.push([x.n,n(x.vap)]); }))));
   c.sort((a,b)=>b[1]-a[1]); return {te:n(e.te),est:n(e.est),pst:p(s.pstn||s.pst),c:n(e.c),vv:n(v.vv),vb:n(v.vb),vn:n(v.tvn),top:c.slice(0,3)}; }
 async function ensureMun(uf){
-  if(MUN[uf] && MUN[uf].t && Date.now()-MUN[uf].t<240000) return;
-  if(MUN[uf] && MUN[uf].loading) return;
-  let list=[]; try{ list=(await munConfig())[uf]||[]; }catch(e){ return; }
-  const d=MUN[uf]||{uf,mun:{},nomes:{},fetchedAt:null}; MUN[uf]=d; d.loading=true; munIdx[uf]=munIdx[uf]||{};
+  const t=TURNO, E=ELE[t], M=MUNS[t];
+  if(M[uf] && M[uf].t && (t!==LATEST || Date.now()-M[uf].t<240000)) return;   // turno encerrado: não relê
+  if(M[uf] && M[uf].loading) return;
+  let list=[]; try{ list=(await munConfig(t))[uf]||[]; }catch(e){ return; }
+  const d=M[uf]||{uf,mun:{},nomes:{},fetchedAt:null}; M[uf]=d; d.loading=true; munIdx[uf]=munIdx[uf]||{};
   list.forEach(m=>{ d.mun[m.cd]=d.mun[m.cd]||{nm:m.nm,cdi:m.cdi,z:m.z||[],te:0,est:0,pst:0,c:0,vv:0,vb:0,vn:0,top:[]}; if(m.cdi) munIdx[uf][m.cdi]=m.cd; });
   const N=list.length; let i=0, done=0;
-  const worker=async()=>{ while(i<N){ const m=list[i++]; try{ Object.assign(d.mun[m.cd], compactMun(await getJSON(`${BASE}/6258/dados/${uf}/${uf}${m.cd}-c0001-e006258-u.json`), d.nomes)); }catch(e){}
-    done++; if(done%20===0||done===N){ d.fetchedAt=new Date().toISOString(); d.progress=[done,N]; if(mapLevel==="mun"&&mapUF===uf){ paintMap(); renderSide(); } } } };
+  const worker=async()=>{ while(i<N){ const m=list[i++]; try{ Object.assign(d.mun[m.cd], compactMun(await getJSON(`${BASE}/${E.pres}/dados/${uf}/${uf}${m.cd}-c0001-e00${E.pres}-u.json`), d.nomes)); }catch(e){}
+    done++; if(done%20===0||done===N){ d.fetchedAt=new Date().toISOString(); d.progress=[done,N]; if(TURNO===t&&mapLevel==="mun"&&mapUF===uf){ paintMap(); renderSide(); } } } };
   await Promise.all(Array.from({length:8},worker)); d.loading=false; d.t=Date.now(); d.progress=null;
-  if(mapLevel==="mun"&&mapUF===uf){ paintMap(); renderSide(); }
+  if(TURNO===t&&mapLevel==="mun"&&mapUF===uf){ paintMap(); renderSide(); }
 }
 async function ensureZon(uf, cd){
-  const m=MUN[uf]?.mun?.[cd]; if(!m) return; ZON[uf]=ZON[uf]||{uf,nomes:MUN[uf].nomes,zon:{}};
-  const zs=(m.z||[]).filter(z=>!ZON[uf].zon[cd+"-"+z]);
-  await Promise.all(zs.map(async z=>{ try{ ZON[uf].zon[cd+"-"+z]=compactMun(await getJSON(`${BASE}/6258/dados/${uf}/${uf}${cd}-z${z}-c0001-e006258-u.json`), MUN[uf].nomes); }catch(e){} }));
-  ZON[uf].fetchedAt=new Date().toISOString();
+  const t=TURNO, E=ELE[t], M=MUNS[t], Z=ZONS[t];
+  const m=M[uf]?.mun?.[cd]; if(!m) return; Z[uf]=Z[uf]||{uf,nomes:M[uf].nomes,zon:{}};
+  const zs=(m.z||[]).filter(z=>!Z[uf].zon[cd+"-"+z]);
+  await Promise.all(zs.map(async z=>{ try{ Z[uf].zon[cd+"-"+z]=compactMun(await getJSON(`${BASE}/${E.pres}/dados/${uf}/${uf}${cd}-z${z}-c0001-e00${E.pres}-u.json`), M[uf].nomes); }catch(e){} }));
+  Z[uf].fetchedAt=new Date().toISOString();
 }
 function unsubMun(){}
 async function goBR(){ unsubMun(); mapLevel="br"; mapUF=null; mapMun=null; await renderMap(); }
@@ -764,7 +821,7 @@ function renderCrumb(){
   c.innerHTML=h; document.getElementById("crumbBR").onclick=goBR;
   const ch=document.getElementById("regchips");
   if(mapLevel==="br"){ ch.innerHTML=[["ALL","Todas as regiões"],...Object.keys(REG).filter(k=>k!=="EX").map(k=>[k,REGN[k]])].map(([k,n])=>`<button type="button" class="chip-btn ${mapRegion===k?'on':''}" data-r="${k}">${n}</button>`).join("")
-      + `<span class="muted" style="margin:0 6px">·</span>` + [["atual","Resultado do 2º turno"],["swing","Variação vs. 1º turno"]].map(([k,n])=>`<button type="button" class="chip-btn ${mapMode===k?'on':''}" data-m="${k}">${n}</button>`).join("");
+      + (TURNO===2 ? `<span class="muted" style="margin:0 6px">·</span>` + [["atual","Resultado do 2º turno"],["swing","Variação vs. 1º turno"]].map(([k,n])=>`<button type="button" class="chip-btn ${mapMode===k?'on':''}" data-m="${k}">${n}</button>`).join("") : "");
     ch.querySelectorAll("button[data-r]").forEach(b=>b.onclick=()=>{mapRegion=b.dataset.r; renderCrumb(); paintMap(); renderSide();});
     ch.querySelectorAll("button[data-m]").forEach(b=>b.onclick=()=>{mapMode=b.dataset.m; renderCrumb(); paintMap();}); }
   else ch.innerHTML=`<button type="button" class="chip-btn" id="backUF">← Brasil</button>`+(mapMun?` <button type="button" class="chip-btn" id="backMun">← ${esc(UFN[mapUF])}</button>`:""), document.getElementById("backUF").onclick=goBR, mapMun&&(document.getElementById("backMun").onclick=()=>{mapMun=null;paintMap();renderCrumb();renderSide();});
