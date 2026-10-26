@@ -772,17 +772,21 @@ const BU_BASE = BASE + "/arquivo-urna"; const PLEITO = {1:"3220", 2:"3221"}; con
 function derIter(b, off, end){ const out=[]; end = end==null? b.length : end; while(off<end){ let tag=b[off++]; if((tag&0x1f)===0x1f) tag=(tag<<8)|b[off++]; let l=b[off++]; if(l&0x80){ const n=l&0x7f; l=0; for(let i=0;i<n;i++) l=l*256+b[off++]; } out.push([tag, b.subarray(off, off+l)]); off+=l; } return out; }
 function ival(v){ let x=0; for(const c of v) x=x*256+c; if(v.length && (v[0]&0x80)) x-=Math.pow(256,v.length); return x; }
 function parseBU(buf){   // EntidadeEnvelopeGenerico -> OCTET STRING(EntidadeBoletimUrna) -> identificacaoSecao{mun,zona,local,secao} + resultadosVotacaoPorEleicao[]
+  // por eleicao: {aptos, cargos:{<codigoCargo>:{comp,b,n,c}}} — 1 presidente, 3 governador, 5 senador, 6/7/8 deputados (no 1o turno a 6259 traz todos juntos)
   const b=new Uint8Array(buf); const outer=derIter(b,0)[0][1]; const inner=derIter(outer,0).find(x=>x[0]===0x04)[1]; const top=derIter(derIter(inner,0)[0][1],0);
   let local=null; for(const [t,v] of top){ if(t===0x30){ const it=derIter(v,0); if(it.length===3&&it[0][0]===0x30&&it[1][0]===0x02&&it[2][0]===0x02){ local=ival(it[1][1]); break; } } }
   const res={};
   for(const [t,v] of top){ if(t!==0x30) continue; const items=derIter(v,0); if(!items.length||items[0][0]!==0x30) continue;
     for(const [t2,v2] of items){ if(t2!==0x30) continue; const it=derIter(v2,0); if(!it.length||it[0][0]!==0x02) continue; const ide=String(ival(it[0][1])); if(!["6257","6258","6259","6260"].includes(ide)) continue;
-      const r={aptos:(it.length>1&&it[1][0]===0x02)?ival(it[1][1]):0, comp:0, b:0, n:0, c:{}};
-      const walk=(node)=>{ for(const [t3,v3] of derIter(node,0)){ if(t3!==0x30) continue; const sub=derIter(v3,0);
-        if(sub.length>=2&&sub[0][0]===0x81&&sub[1][0]===0x82){ const tipo=sub[0][1][0], qtd=ival(sub[1][1]); const ident=sub.find(x=>x[0]===0xa3); if(ident){ const pc=derIter(ident[1],0); const cod=String(ival(pc[pc.length-1][1])); r.c[cod]=(r.c[cod]||0)+qtd; } else if(tipo===2) r.b+=qtd; else if(tipo===3) r.n+=qtd; }
-        else { if(sub.length>=2&&sub[0][0]===0x0a&&sub[1][0]===0x02&&r.comp===0) r.comp=ival(sub[1][1]); walk(v3); } } };
-      for(const [t3,v3] of it.slice(1)) if(t3===0x30) walk(v3);
-      res[ide]=r; } }
+      const cargos={};
+      for(const [t3,v3] of it.slice(1)){ if(t3!==0x30) continue;
+        for(const [t4,v4] of derIter(v3,0)){ if(t4!==0x30) continue; const sub=derIter(v4,0); if(sub.length<3||sub[0][0]!==0x0a) continue; const comp=ival(sub[1][1]);
+          for(const [t5,v5] of derIter(sub[2][1],0)){ if(t5!==0x30) continue; const tv=derIter(v5,0); if(tv.length<3) continue; const cargo=ival(tv[0][1]);
+            const r=cargos[cargo]=cargos[cargo]||{comp, b:0, n:0, c:{}};
+            for(const [t6,v6] of derIter(tv[2][1],0)){ if(t6!==0x30) continue; const vv=derIter(v6,0); if(vv.length<2||vv[0][0]!==0x81||vv[1][0]!==0x82) continue;
+              const tipo=vv[0][1][0], qtd=ival(vv[1][1]); const ident=vv.find(x=>x[0]===0xa3);
+              if(ident){ const pc=derIter(ident[1],0); const cod=String(ival(pc[pc.length-1][1])); r.c[cod]=(r.c[cod]||0)+qtd; } else if(tipo===2) r.b+=qtd; else if(tipo===3) r.n+=qtd; } } } }
+      res[ide]={aptos:(it.length>1&&it[1][0]===0x02)?ival(it[1][1]):0, cargos}; } }
   return {local, ele:res};
 }
 async function fetchRetry(url, signal, json){ let last=null; for(let i=0;i<6;i++){ try{ const r=await fetch(url,{signal,cache:"force-cache"}); if(r.status===429){ last=new Error("HTTP 429"); await new Promise(z=>setTimeout(z, Math.min(1500*(i+1),8000)+Math.random()*600)); continue; } if(!r.ok) throw new Error("HTTP "+r.status); return json? r.json() : r.arrayBuffer(); }catch(e){ if(signal.aborted) throw e; last=e; if(String(e).includes("HTTP 404")) throw e; await new Promise(z=>setTimeout(z, 400*(i+1))); } } throw last; }
@@ -798,9 +802,9 @@ async function fetchSecLive(uf, cd){
   const repaint=()=>{ S[uf].fetchedAt=new Date().toISOString(); delete LOCAGG[key]; if(TURNO===t&&mapLevel==="loc"&&mapUF===uf&&mapMun===cd){ paintMap(); renderSide(); } };
   const worker=async()=>{ while(i<jobs.length && !ctl.signal.aborted){ const [z,s]=jobs[i++]; const z4=String(z).padStart(4,"0"), s4=String(s).padStart(4,"0"); const dir=`${BU_BASE}/${PLEITO[t]}/dados/${uf}/${m5}/${z4}/${s4}`;
       try{ const aux=await fetchRetry(`${dir}/${P}-${uf}-m${m5}-z${z4}-s${s4}-aux.json`, ctl.signal, true);
-        const h=(aux.hashes||[]).find(x=>x.st==="Totalizado")||(aux.hashes||[])[0]; const bu=h&&(h.arq||[]).find(a=>a.tp==="bu"); if(!bu) throw new Error("sem BU");
-        const p=parseBU(await fetchRetry(`${dir}/${h.hash}/${bu.nm}`, ctl.signal, false)); const pr=p.ele[pres]; if(!pr) throw new Error("sem presidente");
-        const rec=[p.local, pr.aptos, pr.comp, pr.b, pr.n, Object.entries(pr.c).sort((a,b)=>b[1]-a[1])]; const gov=p.ele[ELE[t].gov]; if(gov) rec.push([gov.b,gov.n,Object.entries(gov.c).sort((a,b)=>b[1]-a[1])]);
+        const h=(aux.hashes||[]).find(x=>x.st==="Totalizado")||(aux.hashes||[])[0]; const bu=h&&((h.arq||[]).find(a=>a.tp==="bu")||(h.arq||[]).find(a=>a.tp==="busa")); if(!bu) throw new Error("sem BU");   // busa = BU do Sistema de Apuração (contingência), mesmo formato
+        const p=parseBU(await fetchRetry(`${dir}/${h.hash}/${bu.nm}`, ctl.signal, false)); const pe=p.ele[pres], pr=pe&&pe.cargos[1]; if(!pr) throw new Error("sem presidente");
+        const rec=[p.local, pe.aptos, pr.comp, pr.b, pr.n, Object.entries(pr.c).sort((a,b)=>b[1]-a[1])]; const ge=p.ele[ELE[t].gov], gov=ge&&ge.cargos[3]; if(gov) rec.push([gov.b,gov.n,Object.entries(gov.c).sort((a,b)=>b[1]-a[1])]);   // só governador (cargo 3)
         (M[cd][z]=M[cd][z]||{})[String(s)]=rec; st.done++;
       }catch(e){ if(ctl.signal.aborted) return; st.miss.add(z+"-"+s); st.done++; }
       if(Date.now()-lastPaint>1500){ lastPaint=Date.now(); repaint(); } } };
@@ -809,7 +813,8 @@ async function fetchSecLive(uf, cd){
 }
 function liveStatus(){ const st=LIVE[TURNO+":"+mapUF+":"+mapMun]; return st&&st.running? ` · lendo boletins direto do TSE... ${st.done} de ${st.total}` : ""; }
 function stopLive(){ for(const k in LIVE){ if(LIVE[k].running){ LIVE[k].ctl.abort(); LIVE[k].running=false; } } }
-function afterLoc(uf, cd){ const A=munLocais(uf,cd); if(A && A.done<A.total) fetchSecLive(uf,cd); }
+function afterLoc(uf, cd){ const S=SECS[TURNO][uf]; if(S && !S.live && S.tot && S.done>=S.tot) return;   // arquivo publicado completo: o que falta sao secoes agregadas (sem BU proprio), nao vale ler o TSE
+  const A=munLocais(uf,cd); if(A && A.done<A.total) fetchSecLive(uf,cd); }
 /* agrega seções por local e por bairro para um município: {locais:[...], bairros:[...], done, total, cands:{cod:votos}} */
 function munLocais(uf, cd){
   const key=TURNO+":"+uf+":"+cd; if(LOCAGG[key]) return LOCAGG[key];
