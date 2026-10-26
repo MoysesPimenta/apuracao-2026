@@ -14,6 +14,7 @@ Site: https://moysespimenta.github.io/apuracao-2026/
 |---|---|
 | `index.html` | Painel completo (mapa, tabela por UF, comparação com o 1º turno, municípios/zonas sob demanda). Tudo inline: CSS, JS e dados do 1º turno. |
 | `geo/br_uf.min.json` | Contorno simplificado dos estados (coordenadas inteiras ×100). |
+| `geo/mun_<uf>.json.gz` | Contornos dos municípios de cada estado (GeoJSON gzipado; a página descomprime no navegador com `DecompressionStream`). |
 | `.nojekyll` | Evita processamento Jekyll no GitHub Pages. |
 
 ## Como funciona
@@ -28,10 +29,9 @@ Site: https://moysespimenta.github.io/apuracao-2026/
 ## Limitações conhecidas
 
 - O TSE limita requisições (429); se muitos visitantes abrirem ao mesmo tempo, a atualização pode atrasar alguns segundos.
-- Os contornos de municípios (`geo/mun_*.json.gz`, ~736 KB) ainda não foram publicados; sem eles o nível município aparece como lista.
 - Fonte única: totalização oficial do TSE. Não há contagem paralela por boletim de urna.
 
 ## Fonte
 
 Dados: Tribunal Superior Eleitoral — Divulgação de Resultados (`resultados.tse.jus.br`).
-Painel gerado a partir do projeto privado `eleicoes2026` (build `build_pub.py`).
+Malhas municipais: IBGE (simplificadas). Painel gerado a partir do projeto privado `eleicoes2026` (build `build_pub.py`).
