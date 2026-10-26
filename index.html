@@ -638,7 +638,9 @@ function labelPoint(g,p){ // maior anel externo: centroide ponderado por área +
     if(!best||A>best.A) best={A, c, w:maxX-minX, h:maxY-minY}; });
   return best||{A:0,c:[0,0],w:0,h:0}; }
 async function loadGeo(name){ if(GEO[name]) return GEO[name]; let fc=null;
-  if(typeof DecompressionStream==="function"){ try{ const r=await fetch(`geo/${name}.json.gz`); if(r.ok){ const ds=new DecompressionStream("gzip"); fc=JSON.parse(await new Response(r.body.pipeThrough(ds)).text()); } }catch(e){} }
+  try{ const r=await fetch(`geo/${name}.json.gz`); if(r.ok){ const buf=await r.arrayBuffer(); const b=new Uint8Array(buf);
+      if(b.length>2 && b[0]===0x1f && b[1]===0x8b){ if(typeof DecompressionStream==="function"){ const ds=new DecompressionStream("gzip"); fc=JSON.parse(await new Response(new Blob([buf]).stream().pipeThrough(ds)).text()); } }
+      else fc=JSON.parse(new TextDecoder().decode(b)); /* servidor já descomprimiu (Content-Encoding) */ } }catch(e){}
   if(!fc){ try{ const r=await fetch(`geo/${name}.min.json`); if(r.ok){ const c=await r.json(); fc={type:"FeatureCollection",features:Object.entries(c).map(([id,polys])=>({type:"Feature",properties:{id},geometry:{type:"MultiPolygon",coordinates:polys.map(ring=>[ring.map(([x,y])=>[x/100,y/100])])}}))}; } }catch(e){} }
   if(!fc){ const r=await fetch(`geo/${name}.json`); if(!r.ok) throw new Error(name==="br_uf"?"mapa indisponível":"o mapa por município deste estado ainda não foi publicado neste site — os números por município e zona estão na lista ao lado"); fc=await r.json(); } const pr=project(fc); fc.features.forEach(f=>{f.d=pathD(f.geometry,pr.p); f.lp=labelPoint(f.geometry,pr.p);}); fc.H=pr.H; GEO[name]=fc; return fc; }
 // ajustes finos (em unidades do viewBox de 1000) para estados cujo centroide cai mal
